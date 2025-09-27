@@ -2,7 +2,7 @@
 
 All notable changes to the Advanced Dataform GCP project.
 
-## [1.0.0] - 2025-01-26
+## [1.0.0] - 2025-09-26
 
 ### 🚀 Initial Open Source Release
 
