@@ -1,4 +1,9 @@
 defaultProject: intelytix
-defaultDataset: dataform
-defaultAssertionDataset: dataform_assertions
-dataformCoreVersion: 3.0.26
+defaultLocation: us-central1
+defaultAssertionDataset: QualityOPs
+dataformCoreVersion: 3.0.30
+
+# Note: Update these settings for your environment:
+# - defaultProject: Your GCP project ID
+# - defaultLocation: Your preferred BigQuery location
+# - defaultAssertionDataset: Dataset for storing data quality assertions

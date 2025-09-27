@@ -1,0 +1,137 @@
+config {
+    schema: "Dev",
+    type: "operations",
+    hasOutput: true,
+    tags: ["example", "incremental", "daily"],
+    description: "NYC 311 Service Requests - Incremental processing with full data quality suite"
+}
+
+js {
+    const { create, dateFilter } = require('includes/helpers');
+
+    const factoryConfig = {
+        type: "incremental",
+        uniqueKeys: ["unique_key"],
+        partitionBy: "DATE(created_date)",
+        clusterBy: ["borough", "agency", "complaint_type"],
+        begin_daysBack: 3,
+        end_daysBack: 0,
+        stagingDataset: "Staging",
+        timestampInStagingName: true, // Add timestamp to staging table name for uniqueness
+        fullRefresh: false, //Default value
+        labels: {
+            team: "civic-data",
+            source: "nyc-311"
+        },
+
+        // Data Quality Assertions
+        assertions: {
+            // Custom columns to show in assertion results (instead of unique keys)
+            columns: ["unique_key", "created_date", "agency_name", "complaint_type"],
+            data_quality: [
+                // Multiple columns in single assertion (new feature)
+                { type: "not_null", columns: ["unique_key", "created_date", "agency"] },
+                // Single column assertions (traditional format)
+                { type: "not_null", column: "complaint_type" },
+                { type: "unique_key", columns: ["unique_key"] },
+                { type: "accepted_values", column: "borough",
+                  values: ["MANHATTAN", "BROOKLYN", "QUEENS", "BRONX", "STATEN ISLAND", "Unspecified"] },
+                { type: "accepted_values", column: "status",
+                  values: ["Open", "Closed", "Pending", "In Progress", "Assigned"] }
+            ],
+
+            // Business Rule Assertions
+            business_rules: [
+                { type: "freshness", dateColumn: "created_date", maxAgeHours: 48 },
+                { type: "row_count", minRows: 1000 },
+                { type: "percentage", condition: "agency IS NOT NULL", percentage: 99 },
+                { type: "percentage", condition: "created_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)", percentage: 85 }
+            ]
+        }
+    };
+
+    const model = create(self(), factoryConfig)
+}
+
+${ model.preSQL }
+
+SELECT
+    -- Primary identifiers
+    unique_key,
+    created_date,
+    closed_date,
+
+    -- Agency Information
+    agency,
+    agency_name,
+
+    -- Complaint Details
+    complaint_type,
+    descriptor,
+    status,
+
+    -- Location Information
+    location_type,
+    incident_zip,
+    incident_address,
+    street_name,
+    cross_street_1,
+    cross_street_2,
+    intersection_street_1,
+    intersection_street_2,
+    address_type,
+    city,
+    landmark,
+    facility_type,
+
+    -- Geographic Data
+    borough,
+    community_board,
+    x_coordinate,
+    y_coordinate,
+    latitude,
+    longitude,
+    location,
+
+    -- Resolution Information
+    due_date,
+    resolution_description,
+    resolution_action_updated_date,
+
+    -- Transportation-specific fields
+    vehicle_type,
+    taxi_company_borough,
+    taxi_pickup_location,
+    bridge_highway_name,
+    bridge_highway_direction,
+    road_ramp,
+    bridge_highway_segment,
+
+    -- Parks-specific fields
+    park_facility_name,
+    park_borough,
+
+    -- Additional metadata
+    bbl,
+    open_data_channel_type,
+
+    -- Computed fields for analytics
+    DATE_DIFF(COALESCE(closed_date, CURRENT_DATE()), created_date, DAY) as days_to_resolution,
+    CASE
+        WHEN status = 'Closed' THEN 'Resolved'
+        WHEN status IN ('Open', 'In Progress', 'Assigned') THEN 'Active'
+        ELSE 'Other'
+    END as status_category,
+
+    -- Time-based groupings
+    EXTRACT(HOUR FROM created_date) as created_hour,
+    EXTRACT(DAYOFWEEK FROM created_date) as created_day_of_week,
+    FORMAT_DATE('%Y-%m', created_date) as created_month
+
+FROM ${ref("products_db", "new_york_311_service_requests")}
+
+WHERE ${dateFilter('created_date')}
+    AND created_date IS NOT NULL
+    AND unique_key IS NOT NULL
+
+${ model.postSQL }

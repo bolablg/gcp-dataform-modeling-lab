@@ -1,0 +1,284 @@
+config {
+    schema: "Dev",
+    type: "operations",
+    hasOutput: true,
+    tags: ["example", "view", "analytics"],
+    description: "NYC 311 Service Request Analytics - Real-time view with materialized option"
+}
+
+js {
+    const { create } = require('includes/helpers');
+
+    const factoryConfig = {
+        type: "view",
+        materialized: true,
+        autoRefresh: true,
+        refreshInterval: 60, // Refresh every hour
+        description: "Real-time analytics view for NYC 311 service requests with performance metrics",
+        labels: {
+            team: "civic-analytics",
+            refresh: "hourly",
+            source: "nyc-311"
+        },
+
+        // Data Quality Assertions for Views
+        assertions: {
+            materialized: false, // Keep assertion views lightweight for better performance
+
+            data_quality: [
+                { type: "not_null", column: "agency" },
+                { type: "not_null", column: "borough" },
+                { type: "not_null", column: "total_requests" },
+                { type: "accepted_values", column: "borough",
+                  values: ["MANHATTAN", "BROOKLYN", "QUEENS", "BRONX", "STATEN ISLAND", "Unspecified"] },
+                { type: "accepted_values", column: "agency_category",
+                  values: ["Public Safety", "Transportation", "Environment", "Housing", "Parks", "Other"] }
+            ],
+
+            business_rules: [
+                { type: "row_count", minRows: 1 },
+                { type: "percentage", condition: "total_requests > 0", percentage: 100 },
+                { type: "percentage", condition: "resolution_rate >= 0", percentage: 100 }
+            ]
+        }
+    };
+    const model = create(self(), factoryConfig)
+}
+
+${ model.preSQL }
+
+WITH base_data AS (
+    SELECT
+        -- Core identifiers
+        unique_key,
+        agency,
+        agency_name,
+
+        -- Geographic information
+        COALESCE(borough, 'Unspecified') as borough,
+        community_board,
+
+        -- Service request details
+        complaint_type,
+        descriptor,
+        status,
+
+        -- Temporal information
+        created_date,
+        closed_date,
+        due_date,
+
+        -- Location details
+        incident_zip,
+        incident_address,
+        city,
+        latitude,
+        longitude,
+
+        -- Resolution information
+        resolution_description,
+        resolution_action_updated_date,
+
+        -- Computed fields
+        CASE
+            WHEN agency IN ('NYPD', 'FDNY') THEN 'Public Safety'
+            WHEN agency IN ('DOT', 'TLC') THEN 'Transportation'
+            WHEN agency IN ('DEP', 'DSNY', 'DEA') THEN 'Environment'
+            WHEN agency IN ('HPD', 'DOB') THEN 'Housing'
+            WHEN agency IN ('DPR') THEN 'Parks'
+            ELSE 'Other'
+        END as agency_category,
+
+        CASE
+            WHEN closed_date IS NOT NULL
+            THEN DATE_DIFF(closed_date, created_date, DAY)
+            ELSE DATE_DIFF(CURRENT_DATE(), created_date, DAY)
+        END as days_since_created,
+
+        CASE
+            WHEN status = 'Closed' THEN 'Resolved'
+            WHEN status IN ('Open', 'In Progress', 'Assigned') THEN 'Active'
+            WHEN status = 'Pending' THEN 'Pending'
+            ELSE 'Other'
+        END as status_category,
+
+        -- Time-based dimensions
+        EXTRACT(YEAR FROM created_date) as created_year,
+        EXTRACT(MONTH FROM created_date) as created_month,
+        EXTRACT(DAYOFWEEK FROM created_date) as created_day_of_week,
+        EXTRACT(HOUR FROM created_date) as created_hour,
+
+        -- Geographic coordinates validation
+        CASE
+            WHEN latitude IS NOT NULL AND longitude IS NOT NULL
+                AND latitude BETWEEN 40.4 AND 40.9
+                AND longitude BETWEEN -74.3 AND -73.7
+            THEN TRUE
+            ELSE FALSE
+        END as has_valid_coordinates
+
+    FROM ${ref("products_db", "new_york_311_service_requests")}
+    WHERE created_date IS NOT NULL
+        AND unique_key IS NOT NULL
+),
+
+agency_summary AS (
+    SELECT
+        agency,
+        agency_name,
+        agency_category,
+        borough,
+
+        -- Volume metrics
+        COUNT(*) as total_requests,
+        COUNT(CASE WHEN status_category = 'Resolved' THEN 1 END) as resolved_requests,
+        COUNT(CASE WHEN status_category = 'Active' THEN 1 END) as active_requests,
+        COUNT(CASE WHEN status_category = 'Pending' THEN 1 END) as pending_requests,
+
+        -- Performance metrics
+        AVG(CASE WHEN status_category = 'Resolved' THEN days_since_created END) as avg_resolution_days,
+        PERCENTILE_CONT(CASE WHEN status_category = 'Resolved' THEN days_since_created END, 0.5) OVER (
+            PARTITION BY agency, borough
+        ) as median_resolution_days,
+
+        -- Quality metrics
+        SAFE_DIVIDE(COUNT(CASE WHEN status_category = 'Resolved' THEN 1 END), COUNT(*)) as resolution_rate,
+        SAFE_DIVIDE(COUNT(CASE WHEN has_valid_coordinates THEN 1 END), COUNT(*)) as geocoding_rate,
+
+        -- Temporal patterns
+        COUNT(CASE WHEN created_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) THEN 1 END) as requests_last_30_days,
+        COUNT(CASE WHEN created_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY) THEN 1 END) as requests_last_7_days,
+        COUNT(CASE WHEN created_date = CURRENT_DATE() THEN 1 END) as requests_today,
+
+        -- Most common complaint types
+        ARRAY_AGG(
+            STRUCT(complaint_type, COUNT(*) as count)
+            ORDER BY COUNT(*) DESC
+            LIMIT 5
+        ) as top_complaint_types,
+
+        -- Recent activity
+        MAX(created_date) as latest_request_date,
+        MIN(created_date) as earliest_request_date,
+
+        -- Geographic distribution
+        COUNT(DISTINCT incident_zip) as unique_zip_codes,
+        COUNT(DISTINCT community_board) as unique_community_boards
+
+    FROM base_data
+    GROUP BY agency, agency_name, agency_category, borough
+),
+
+borough_rollup AS (
+    SELECT
+        'ALL_AGENCIES' as agency,
+        'All Agencies Combined' as agency_name,
+        'Citywide' as agency_category,
+        borough,
+
+        SUM(total_requests) as total_requests,
+        SUM(resolved_requests) as resolved_requests,
+        SUM(active_requests) as active_requests,
+        SUM(pending_requests) as pending_requests,
+
+        AVG(avg_resolution_days) as avg_resolution_days,
+        AVG(median_resolution_days) as median_resolution_days,
+        AVG(resolution_rate) as resolution_rate,
+        AVG(geocoding_rate) as geocoding_rate,
+
+        SUM(requests_last_30_days) as requests_last_30_days,
+        SUM(requests_last_7_days) as requests_last_7_days,
+        SUM(requests_today) as requests_today,
+
+        -- Aggregated arrays are complex, so we'll use NULL for rollups
+        CAST(NULL AS ARRAY<STRUCT<complaint_type STRING, count INT64>>) as top_complaint_types,
+
+        MAX(latest_request_date) as latest_request_date,
+        MIN(earliest_request_date) as earliest_request_date,
+
+        SUM(unique_zip_codes) as unique_zip_codes,
+        SUM(unique_community_boards) as unique_community_boards
+
+    FROM agency_summary
+    GROUP BY borough
+),
+
+final_analytics AS (
+    SELECT * FROM agency_summary
+    UNION ALL
+    SELECT * FROM borough_rollup
+)
+
+SELECT
+    agency,
+    agency_name,
+    agency_category,
+    borough,
+
+    -- Volume metrics
+    total_requests,
+    resolved_requests,
+    active_requests,
+    pending_requests,
+
+    -- Performance metrics (rounded for readability)
+    ROUND(avg_resolution_days, 1) as avg_resolution_days,
+    ROUND(median_resolution_days, 1) as median_resolution_days,
+
+    -- Rates as percentages
+    ROUND(resolution_rate * 100, 1) as resolution_rate_percent,
+    ROUND(geocoding_rate * 100, 1) as geocoding_rate_percent,
+
+    -- Recent activity
+    requests_last_30_days,
+    requests_last_7_days,
+    requests_today,
+
+    -- Complaint type insights
+    top_complaint_types,
+
+    -- Date ranges
+    latest_request_date,
+    earliest_request_date,
+    DATE_DIFF(CURRENT_DATE(), latest_request_date, DAY) as days_since_latest,
+
+    -- Geographic coverage
+    unique_zip_codes,
+    unique_community_boards,
+
+    -- Performance categorization
+    CASE
+        WHEN resolution_rate >= 0.9 THEN 'Excellent'
+        WHEN resolution_rate >= 0.75 THEN 'Good'
+        WHEN resolution_rate >= 0.5 THEN 'Fair'
+        ELSE 'Needs Improvement'
+    END as performance_category,
+
+    -- Activity level
+    CASE
+        WHEN requests_last_7_days >= 100 THEN 'High Activity'
+        WHEN requests_last_7_days >= 25 THEN 'Moderate Activity'
+        WHEN requests_last_7_days >= 5 THEN 'Low Activity'
+        ELSE 'Minimal Activity'
+    END as activity_level,
+
+    -- Freshness indicator
+    CASE
+        WHEN latest_request_date = CURRENT_DATE() THEN 'Current'
+        WHEN latest_request_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY) THEN 'Recent'
+        WHEN latest_request_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY) THEN 'This Week'
+        ELSE 'Older'
+    END as data_freshness,
+
+    -- Metadata
+    CURRENT_DATETIME() as view_refreshed_at
+
+FROM final_analytics
+WHERE total_requests > 0  -- Only include agencies/boroughs with actual requests
+
+ORDER BY
+    CASE WHEN agency = 'ALL_AGENCIES' THEN 0 ELSE 1 END,  -- Show rollups first
+    borough,
+    total_requests DESC
+
+${ model.postSQL }

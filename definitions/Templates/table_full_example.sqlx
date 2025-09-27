@@ -1,0 +1,255 @@
+config {
+    schema: "Dev",
+    type: "operations",
+    hasOutput: true,
+    tags: ["example", "snapshot", "monthly"],
+    description: "NYC 311 Monthly Analytics - Table snapshot with comprehensive performance metrics"
+}
+
+js {
+    const { create } = require('includes/helpers');
+
+    const factoryConfig = {
+        type: "table",
+        partitionBy: "report_month",
+        clusterBy: ["borough", "metric_type", "agency_category"],
+        labels: {
+            team: "civic-analytics",
+            source: "nyc-311"
+        },
+
+        // Data Quality Assertions
+        assertions: {
+            materialized: true, // Make assertion views materialized for better performance
+
+            data_quality: [
+                { type: "not_null", column: "borough" },
+                { type: "not_null", column: "report_month" },
+                { type: "not_null", column: "agency_category" },
+                { type: "not_null", column: "metric_value" },
+                { type: "unique_key", columns: ["borough", "agency_category", "metric_type", "report_month"] },
+                { type: "accepted_values", column: "borough",
+                  values: ["MANHATTAN", "BROOKLYN", "QUEENS", "BRONX", "STATEN ISLAND", "Citywide"] },
+                { type: "accepted_values", column: "agency_category",
+                  values: ["Public Safety", "Transportation", "Environment", "Housing", "Parks", "Other"] },
+                { type: "accepted_values", column: "metric_type",
+                  values: ["TotalComplaints", "ResolvedComplaints", "AvgResolutionDays", "OpenComplaints"] }
+            ],
+
+            // Business Rule Assertions
+            business_rules: [
+                { type: "freshness", dateColumn: "report_month", maxAgeHours: 168 }, // 7 days
+                { type: "row_count", minRows: 50, maxRows: 1000 },
+                { type: "percentage", condition: "metric_value >= 0", percentage: 100 },
+                { type: "percentage", condition: "metric_value > 0", percentage: 85 }
+            ]
+        }
+    };
+    const model = create(self(), factoryConfig)
+}
+
+${ model.preSQL }
+
+WITH monthly_base AS (
+    SELECT
+        -- Geographic dimensions
+        COALESCE(borough, 'Unspecified') as borough,
+        DATE_TRUNC(created_date, MONTH) as report_month,
+
+        -- Agency categorization
+        CASE
+            WHEN agency IN ('NYPD', 'FDNY') THEN 'Public Safety'
+            WHEN agency IN ('DOT', 'TLC') THEN 'Transportation'
+            WHEN agency IN ('DEP', 'DSNY', 'DEA') THEN 'Environment'
+            WHEN agency IN ('HPD', 'DOB') THEN 'Housing'
+            WHEN agency IN ('DPR') THEN 'Parks'
+            ELSE 'Other'
+        END as agency_category,
+
+        -- Service request details
+        unique_key,
+        complaint_type,
+        status,
+        created_date,
+        closed_date,
+
+        -- Resolution metrics
+        CASE
+            WHEN closed_date IS NOT NULL
+            THEN DATE_DIFF(closed_date, created_date, DAY)
+            ELSE NULL
+        END as resolution_days
+
+    FROM ${ref("products_db", "new_york_311_service_requests")}
+    WHERE created_date >= DATE_SUB(DATE_TRUNC(CURRENT_DATE(), MONTH), INTERVAL 24 MONTH)
+        AND created_date IS NOT NULL
+        AND unique_key IS NOT NULL
+),
+
+monthly_aggregates AS (
+    SELECT
+        borough,
+        report_month,
+        agency_category,
+
+        -- Volume metrics
+        COUNT(DISTINCT unique_key) as total_complaints,
+        COUNT(DISTINCT CASE WHEN status = 'Closed' THEN unique_key END) as resolved_complaints,
+        COUNT(DISTINCT CASE WHEN status IN ('Open', 'In Progress', 'Assigned') THEN unique_key END) as open_complaints,
+
+        -- Performance metrics
+        AVG(CASE WHEN resolution_days IS NOT NULL THEN resolution_days END) as avg_resolution_days,
+        PERCENTILE_CONT(resolution_days, 0.5) OVER (
+            PARTITION BY borough, agency_category, report_month
+        ) as median_resolution_days,
+
+        -- Quality metrics
+        SAFE_DIVIDE(
+            COUNT(DISTINCT CASE WHEN status = 'Closed' THEN unique_key END),
+            COUNT(DISTINCT unique_key)
+        ) * 100 as resolution_rate_percent,
+
+        COUNT(DISTINCT complaint_type) as complaint_type_diversity
+
+    FROM monthly_base
+    GROUP BY borough, report_month, agency_category
+),
+
+citywide_rollup AS (
+    SELECT
+        'Citywide' as borough,
+        report_month,
+        agency_category,
+        SUM(total_complaints) as total_complaints,
+        SUM(resolved_complaints) as resolved_complaints,
+        SUM(open_complaints) as open_complaints,
+        AVG(avg_resolution_days) as avg_resolution_days,
+        AVG(median_resolution_days) as median_resolution_days,
+        AVG(resolution_rate_percent) as resolution_rate_percent,
+        AVG(complaint_type_diversity) as complaint_type_diversity
+
+    FROM monthly_aggregates
+    GROUP BY report_month, agency_category
+),
+
+combined_data AS (
+    SELECT * FROM monthly_aggregates
+    UNION ALL
+    SELECT * FROM citywide_rollup
+),
+
+final_metrics AS (
+    -- Total Complaints
+    SELECT
+        borough,
+        report_month,
+        agency_category,
+        'TotalComplaints' as metric_type,
+        CAST(total_complaints AS FLOAT64) as metric_value,
+        'count' as metric_unit,
+        'Total number of service requests received' as metric_description
+    FROM combined_data
+
+    UNION ALL
+
+    -- Resolved Complaints
+    SELECT
+        borough,
+        report_month,
+        agency_category,
+        'ResolvedComplaints' as metric_type,
+        CAST(resolved_complaints AS FLOAT64) as metric_value,
+        'count' as metric_unit,
+        'Number of service requests resolved' as metric_description
+    FROM combined_data
+
+    UNION ALL
+
+    -- Average Resolution Days
+    SELECT
+        borough,
+        report_month,
+        agency_category,
+        'AvgResolutionDays' as metric_type,
+        avg_resolution_days as metric_value,
+        'days' as metric_unit,
+        'Average days to resolve service requests' as metric_description
+    FROM combined_data
+    WHERE avg_resolution_days IS NOT NULL
+
+    UNION ALL
+
+    -- Resolution Rate Percentage
+    SELECT
+        borough,
+        report_month,
+        agency_category,
+        'ResolutionRatePercent' as metric_type,
+        resolution_rate_percent as metric_value,
+        'percentage' as metric_unit,
+        'Percentage of service requests resolved' as metric_description
+    FROM combined_data
+    WHERE resolution_rate_percent IS NOT NULL
+
+    UNION ALL
+
+    -- Open Complaints
+    SELECT
+        borough,
+        report_month,
+        agency_category,
+        'OpenComplaints' as metric_type,
+        CAST(open_complaints AS FLOAT64) as metric_value,
+        'count' as metric_unit,
+        'Number of active service requests' as metric_description
+    FROM combined_data
+)
+
+SELECT
+    borough,
+    report_month,
+    agency_category,
+    metric_type,
+    metric_value,
+    metric_unit,
+    metric_description,
+    CURRENT_DATETIME() as last_updated,
+
+    -- Trend Analysis
+    LAG(metric_value) OVER (
+        PARTITION BY borough, agency_category, metric_type
+        ORDER BY report_month
+    ) as previous_month_value,
+
+    -- Growth Calculation
+    SAFE_DIVIDE(
+        metric_value - LAG(metric_value) OVER (
+            PARTITION BY borough, agency_category, metric_type
+            ORDER BY report_month
+        ),
+        LAG(metric_value) OVER (
+            PARTITION BY borough, agency_category, metric_type
+            ORDER BY report_month
+        )
+    ) * 100 as month_over_month_growth_percent,
+
+    -- Year-over-year comparison
+    LAG(metric_value, 12) OVER (
+        PARTITION BY borough, agency_category, metric_type
+        ORDER BY report_month
+    ) as same_month_last_year_value,
+
+    SAFE_DIVIDE(
+        metric_value - LAG(metric_value, 12) OVER (
+            PARTITION BY borough, agency_category, metric_type
+            ORDER BY report_month
+        ),
+        LAG(metric_value, 12) OVER (
+            PARTITION BY borough, agency_category, metric_type
+            ORDER BY report_month
+        )
+    ) * 100 as year_over_year_growth_percent
+
+FROM final_metrics
+
+${ model.postSQL }

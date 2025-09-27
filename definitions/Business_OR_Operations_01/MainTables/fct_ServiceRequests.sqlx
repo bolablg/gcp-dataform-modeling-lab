@@ -1,0 +1,66 @@
+config {
+    schema: "data_for_tutos",
+    type: "operations", // Never change this value. you can choose between incremental, table and view in your factoryConfig below.
+    hasOutput: true,
+    description: 'Your table description. e.g: Service requests in New York 311.',
+    tags: ["day"] // You can create a workflow to execute all the models with a particular tag together on your desired schedule. e.g: models with tag day can run everyday at 00:01
+}
+
+js {
+    const { create, dateFilter } = require('includes/helpers');
+    const factoryConfig = {
+        type: "incremental",
+        uniqueKeys: ["ID"],
+        partitionBy: "DATE(creationDate)",
+        clusterBy: ["Status", "complaintType", "City"],
+        begin_daysBack: 3650,
+        end_daysBack: 3649,
+        labels: {
+            team:"intelytix",
+            activity: "tutorial"
+        },
+        fullRefresh: false,
+
+        // Data Quality Assertions
+        assertions: {
+            columns: ['ID', 'creationDate'],
+            data_quality: [
+                { type: "not_null", columns: ["ID", "complaintType", "City"] },
+                { type: "unique_key", columns: ["ID"] },
+            ]
+        }
+    };
+    const model = create(self(), factoryConfig);
+}
+
+${ model.preSQL }
+
+SELECT
+  unique_key as ID,
+  created_date as creationDate,
+  due_date as dueDate,
+  closed_date as closureDate,
+  location_type as locationType,
+  location as location_LatLong,
+  incident_zip as zipCode,
+  incident_address as streetAddress,
+  CONCAT(
+    street_name,
+    CASE When COALESCE(cross_street_1, cross_street_2) IS NOT NULL THEN CONCAT(", cross ", combine_non_null_strings([cross_street_1, cross_street_2], " and ")) ELSE "" END,
+    CASE When COALESCE(intersection_street_1, intersection_street_2) IS NOT NULL THEN CONCAT(", on ", combine_non_null_strings([intersection_street_1, intersection_street_2], " and ")) ELSE "" END
+  ) as streetName,
+  complaint_type complaintType,
+  City,
+  CONCAT(agency, " - ", agency_name) as Agency,
+  CONCAT(borough, " - ", community_board) as Community,
+  open_data_channel_type as Channel,
+  Status,
+  resolution_action_updated_date as resolutionDate,
+  combine_non_null_strings([descriptor, resolution_description], ": ") as Description
+
+
+  
+FROM ${ref("products_db", "new_york_311_service_requests")}
+WHERE ${dateFilter('created_date')}
+
+${ model.postSQL }
