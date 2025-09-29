@@ -1,5 +1,5 @@
 config {
-    schema: "data_for_tutos",
+    schema: "TUTOs",
     type: "operations", // Never change this value. you can choose between incremental, table and view in your factoryConfig below.
     hasOutput: true,
     description: 'Your table description. e.g: Service requests in New York 311.',
@@ -46,8 +46,8 @@ SELECT
   incident_address as streetAddress,
   CONCAT(
     street_name,
-    CASE When COALESCE(cross_street_1, cross_street_2) IS NOT NULL THEN CONCAT(", cross ", combine_non_null_strings([cross_street_1, cross_street_2], " and ")) ELSE "" END,
-    CASE When COALESCE(intersection_street_1, intersection_street_2) IS NOT NULL THEN CONCAT(", on ", combine_non_null_strings([intersection_street_1, intersection_street_2], " and ")) ELSE "" END
+    CASE When COALESCE(cross_street_1, cross_street_2) IS NOT NULL THEN CONCAT(", cross ", CUSTOMs.concatNonNullStrings([cross_street_1, cross_street_2], " and ")) ELSE "" END,
+    CASE When COALESCE(intersection_street_1, intersection_street_2) IS NOT NULL THEN CONCAT(", on ", CUSTOMs.concatNonNullStrings([intersection_street_1, intersection_street_2], " and ")) ELSE "" END
   ) as streetName,
   complaint_type complaintType,
   City,
@@ -56,7 +56,7 @@ SELECT
   open_data_channel_type as Channel,
   Status,
   resolution_action_updated_date as resolutionDate,
-  combine_non_null_strings([descriptor, resolution_description], ": ") as Description
+  CUSTOMs.concatNonNullStrings([descriptor, resolution_description], ": ") as Description
 
 
   
