@@ -24,6 +24,7 @@ const { DateFilter } = require('./utilities/date-filter.js');
 const { TableOptions } = require('./utilities/table-options.js');
 const { ConfigValidator } = require('./utilities/config-validator.js');
 const { WorkflowConfig } = require('./utilities/workflow-config.js');
+const { UDFs } = require('./utilities/UDFs.js');
 
 
 module.exports = {
@@ -49,5 +50,6 @@ module.exports = {
     DateFilter,
     TableOptions,
     ConfigValidator,
-    WorkflowConfig
+    WorkflowConfig,
+    UDFs
 };
