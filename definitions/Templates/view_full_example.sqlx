@@ -11,7 +11,7 @@ js {
 
     const factoryConfig = {
         type: "view",
-        materialized: true,
+        materialized: false,
         autoRefresh: true,
         refreshInterval: 60, // Refresh every hour
         description: "Real-time analytics view for NYC 311 service requests with performance metrics",
@@ -92,7 +92,7 @@ WITH base_data AS (
         CASE
             WHEN closed_date IS NOT NULL
             THEN DATE_DIFF(closed_date, created_date, DAY)
-            ELSE DATE_DIFF(CURRENT_DATE(), created_date, DAY)
+            ELSE DATE_DIFF(CURRENT_TIMESTAMP(), created_date, DAY)
         END as days_since_created,
 
         CASE
@@ -137,25 +137,16 @@ agency_summary AS (
 
         -- Performance metrics
         AVG(CASE WHEN status_category = 'Resolved' THEN days_since_created END) as avg_resolution_days,
-        PERCENTILE_CONT(CASE WHEN status_category = 'Resolved' THEN days_since_created END, 0.5) OVER (
-            PARTITION BY agency, borough
-        ) as median_resolution_days,
+        --PERCENTILE_CONT(CASE WHEN status_category = 'Resolved' THEN days_since_created END, 0.5) OVER ( PARTITION BY agency, borough ) as median_resolution_days,
 
         -- Quality metrics
         SAFE_DIVIDE(COUNT(CASE WHEN status_category = 'Resolved' THEN 1 END), COUNT(*)) as resolution_rate,
         SAFE_DIVIDE(COUNT(CASE WHEN has_valid_coordinates THEN 1 END), COUNT(*)) as geocoding_rate,
 
         -- Temporal patterns
-        COUNT(CASE WHEN created_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) THEN 1 END) as requests_last_30_days,
-        COUNT(CASE WHEN created_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY) THEN 1 END) as requests_last_7_days,
-        COUNT(CASE WHEN created_date = CURRENT_DATE() THEN 1 END) as requests_today,
-
-        -- Most common complaint types
-        ARRAY_AGG(
-            STRUCT(complaint_type, COUNT(*) as count)
-            ORDER BY COUNT(*) DESC
-            LIMIT 5
-        ) as top_complaint_types,
+        COUNT(CASE WHEN created_date >= DATE_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY) THEN 1 END) as requests_last_30_days,
+        COUNT(CASE WHEN created_date >= DATE_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY) THEN 1 END) as requests_last_7_days,
+        COUNT(CASE WHEN created_date = CURRENT_TIMESTAMP() THEN 1 END) as requests_today,
 
         -- Recent activity
         MAX(created_date) as latest_request_date,
@@ -182,7 +173,7 @@ borough_rollup AS (
         SUM(pending_requests) as pending_requests,
 
         AVG(avg_resolution_days) as avg_resolution_days,
-        AVG(median_resolution_days) as median_resolution_days,
+        --AVG(median_resolution_days) as median_resolution_days,
         AVG(resolution_rate) as resolution_rate,
         AVG(geocoding_rate) as geocoding_rate,
 
@@ -191,7 +182,7 @@ borough_rollup AS (
         SUM(requests_today) as requests_today,
 
         -- Aggregated arrays are complex, so we'll use NULL for rollups
-        CAST(NULL AS ARRAY<STRUCT<complaint_type STRING, count INT64>>) as top_complaint_types,
+        --CAST(NULL AS ARRAY<STRUCT<complaint_type STRING, count INT64>>) as top_complaint_types,
 
         MAX(latest_request_date) as latest_request_date,
         MIN(earliest_request_date) as earliest_request_date,
@@ -223,7 +214,7 @@ SELECT
 
     -- Performance metrics (rounded for readability)
     ROUND(avg_resolution_days, 1) as avg_resolution_days,
-    ROUND(median_resolution_days, 1) as median_resolution_days,
+    --ROUND(median_resolution_days, 1) as median_resolution_days,
 
     -- Rates as percentages
     ROUND(resolution_rate * 100, 1) as resolution_rate_percent,
@@ -235,12 +226,12 @@ SELECT
     requests_today,
 
     -- Complaint type insights
-    top_complaint_types,
+    --top_complaint_types,
 
     -- Date ranges
     latest_request_date,
     earliest_request_date,
-    DATE_DIFF(CURRENT_DATE(), latest_request_date, DAY) as days_since_latest,
+    DATE_DIFF(CURRENT_TIMESTAMP(), latest_request_date, DAY) as days_since_latest,
 
     -- Geographic coverage
     unique_zip_codes,
@@ -264,14 +255,14 @@ SELECT
 
     -- Freshness indicator
     CASE
-        WHEN latest_request_date = CURRENT_DATE() THEN 'Current'
-        WHEN latest_request_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY) THEN 'Recent'
-        WHEN latest_request_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY) THEN 'This Week'
+        WHEN latest_request_date = CURRENT_TIMESTAMP() THEN 'Current'
+        WHEN latest_request_date >= DATE_SUB(CURRENT_TIMESTAMP(), INTERVAL 1 DAY) THEN 'Recent'
+        WHEN latest_request_date >= DATE_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY) THEN 'This Week'
         ELSE 'Older'
     END as data_freshness,
 
     -- Metadata
-    CURRENT_DATETIME() as view_refreshed_at
+    CURRENT_TIMESTAMP() as view_refreshed_at
 
 FROM final_analytics
 WHERE total_requests > 0  -- Only include agencies/boroughs with actual requests

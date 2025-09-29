@@ -116,7 +116,7 @@ SELECT
     open_data_channel_type,
 
     -- Computed fields for analytics
-    DATE_DIFF(COALESCE(closed_date, CURRENT_DATE()), created_date, DAY) as days_to_resolution,
+    DATE_DIFF(COALESCE(closed_date, CURRENT_TIMESTAMP()), created_date, DAY) as days_to_resolution,
     CASE
         WHEN status = 'Closed' THEN 'Resolved'
         WHEN status IN ('Open', 'In Progress', 'Assigned') THEN 'Active'
