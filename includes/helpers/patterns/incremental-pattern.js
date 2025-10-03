@@ -1,11 +1,13 @@
 /**
  * Incremental Pattern Module
  * Handles complex incremental/MERGE operations with dynamic schema management
+ * Features smart first-run detection that automatically uses snapshot pattern for cost optimization
  */
 
 const { SchemaManager } = require('../core/schema-manager.js');
 const { MergeBuilder } = require('../core/merge-builder.js');
 const { TableBuilder } = require('../core/table-builder.js');
+const { TableOptions } = require('../utilities/table-options.js');
 const { AssertionViewsBuilder } = require('../assertions/assertion-views-builder.js');
 
 class IncrementalPattern {
@@ -56,9 +58,11 @@ class IncrementalPattern {
         const preSQL = this._buildPreSQL(
             variableDeclarations,
             stagingTablePlaceholder,
+            targetTable,
             uniqueKeys,
             partitionColumn,
-            isFullRefresh
+            isFullRefresh,
+            config
         );
 
         const postSQL = this._buildPostSQL(
@@ -66,7 +70,9 @@ class IncrementalPattern {
             schemaMigrationSQL,
             mergeOp,
             stagingTablePlaceholder,
-            partitionColumn
+            targetTable,
+            partitionColumn,
+            config
         );
 
         // Replace placeholders with backticked names
@@ -110,6 +116,9 @@ ${assertionViewsSQL}
     static _buildVariableDeclarations(isFullRefresh, begin_daysBack, end_daysBack, partitionColumn) {
         const variableDeclarations = [];
 
+        // Add target existence check variable
+        variableDeclarations.push('DECLARE target_exists BOOL;');
+
         if (!isFullRefresh) {
             variableDeclarations.push(`DECLARE beginDate DEFAULT DATE_SUB(CURRENT_DATE(), INTERVAL ${begin_daysBack} DAY);`);
             variableDeclarations.push(`DECLARE limitDate DEFAULT DATE_SUB(CURRENT_DATE(), INTERVAL ${end_daysBack} DAY);`);
@@ -133,74 +142,145 @@ ${assertionViewsSQL}
     }
 
     /**
-     * Build preSQL section
+     * Build preSQL section with smart first-run detection
      * @private
      */
-    static _buildPreSQL(variableDeclarations, stagingTablePlaceholder, uniqueKeys, partitionColumn, isFullRefresh) {
+    static _buildPreSQL(variableDeclarations, stagingTablePlaceholder, targetTable, uniqueKeys, partitionColumn, isFullRefresh, config) {
+        const tableParts = this._parseTableName(targetTable);
+        const { project, dataset, table } = tableParts;
+
+        // Build snapshot-style CREATE statement for first run
+        const tableOptions = TableOptions.build(config);
+        const metadata = TableBuilder._buildTableMetadata(config);
+        const snapshotCreate = metadata
+            ? `CREATE TABLE ${targetTable}${tableOptions}\n${metadata}`
+            : `CREATE TABLE ${targetTable}${tableOptions}`;
+
         return `
 /*
 ╔═══════════════════════════════════════════════════════════════╗
-║                    🚀 INCREMENTAL PATTERN                    ║
+║              🔀 SMART INCREMENTAL PATTERN                    ║
 ╠═══════════════════════════════════════════════════════════════╣
 ║ Mode: ${isFullRefresh ? 'FULL REFRESH' : 'INCREMENTAL'.padEnd(12)} │ Keys: ${uniqueKeys.join(', ').padEnd(20)} ║
 ║ Partition: ${(partitionColumn || 'None').padEnd(18)} │ Generated: ${new Date().toISOString().split('T')[0]} ║
+║ Smart Mode: Auto-switches to snapshot for first run          ║
 ╚═══════════════════════════════════════════════════════════════╝
 */
 
 ${variableDeclarations.join('\n')}
+DECLARE create_sql STRING;
 
--- 📦 STAGING: Create temporary table with 12h expiration
-CREATE OR REPLACE TABLE ${stagingTablePlaceholder}
-OPTIONS(
-  expiration_timestamp=TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL 12 HOUR)
-)
-AS (
+-- 🔍 CHECK: Determine if target table exists
+SET target_exists = (
+    SELECT COUNT(*) > 0
+    FROM \`${project}.${dataset}\`.INFORMATION_SCHEMA.TABLES
+    WHERE table_name = '${table}'
+);
+
+-- ========== BUILD CREATE STATEMENT DYNAMICALLY ==========
+IF NOT target_exists THEN
+    -- Branch 1: SNAPSHOT - Create target directly
+    SET create_sql = """
+        ${snapshotCreate}
+        AS (
+    """;
+ELSE
+    -- Branch 2: INCREMENTAL - Create staging table
+    SET create_sql = """
+        CREATE OR REPLACE TABLE ${stagingTablePlaceholder}
+        OPTIONS(
+          expiration_timestamp=TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL 12 HOUR)
+        )
+        AS (
+    """;
+END IF;
+
+-- Execute the dynamic CREATE statement with the SELECT query
+EXECUTE IMMEDIATE create_sql || """
       `;
     }
 
     /**
-     * Build postSQL section
+     * Parse table name into components
      * @private
      */
-    static _buildPostSQL(createTableSQL, schemaMigrationSQL, mergeOp, stagingTablePlaceholder, partitionColumn) {
+    static _parseTableName(targetTable) {
+        const cleanTarget = targetTable.replace(/`/g, '');
+        const tableParts = cleanTarget.split('.');
+        return {
+            project: tableParts[0],
+            dataset: tableParts[1],
+            table: tableParts[2],
+            full: cleanTarget
+        };
+    }
+
+    /**
+     * Build postSQL section with conditional logic for snapshot vs incremental
+     * @private
+     */
+    static _buildPostSQL(createTableSQL, schemaMigrationSQL, mergeOp, stagingTablePlaceholder, targetTable, partitionColumn, config) {
         return `
-);
+        )  -- Close the AS ( from CREATE statement
+""";  -- Close the EXECUTE IMMEDIATE
 
--- 🏗️ TARGET: Ensure target table exists with proper schema
-${createTableSQL};
+-- ========== BRANCH 1: SNAPSHOT MODE (First Run) ==========
+IF NOT target_exists THEN
+    -- 📊 PARTITIONS: Extract partition values from newly created target table
+    ${partitionColumn
+      ? `SET partition_values = (
+           SELECT STRING_AGG(DISTINCT CONCAT("'", ${partitionColumn}, "'"), ", ")
+           FROM ${targetTable}
+         );`
+      : `-- No partition column specified`}
 
--- 🔄 SCHEMA: Migrate and sync column definitions
-${schemaMigrationSQL}
+    /*
+    ┌─────────────────────────────────────────────────────────────┐
+    │ ✅ SNAPSHOT MODE COMPLETE (First Run)                      │
+    │ • Target table created directly from SELECT                 │
+    │ • No staging table or MERGE needed (50% cost savings!)     │
+    │ • Partition values extracted for assertion views           │
+    └─────────────────────────────────────────────────────────────┘
+    */
 
--- 📋 METADATA: Extract dynamic schema information
-EXECUTE IMMEDIATE FORMAT(""" %s """, """${mergeOp.schemaSQL}""")
-INTO update_set, insert_cols, insert_vals, join_condition;
+-- ========== BRANCH 2: INCREMENTAL MODE (Subsequent Runs) ==========
+ELSE
+    -- 🏗️ TARGET: Ensure target table exists with proper schema
+    ${createTableSQL};
 
--- 📊 PARTITIONS: ${mergeOp.hasPartition ? 'Extract values for targeted merge' : 'No partition filtering needed'}
-${mergeOp.hasPartition
-  ? `SET partition_values = (
-       SELECT STRING_AGG(DISTINCT CONCAT("'", ${partitionColumn}, "'"), ", ")
-       FROM ${stagingTablePlaceholder}
-     );`
-  : `-- Partition values: Not applicable for this model`}
+    -- 🔄 SCHEMA: Migrate and sync column definitions
+    ${schemaMigrationSQL}
 
--- 🔀 MERGE: Build and execute dynamic UPSERT operation
-SET merge_sql = FORMAT(""" ${mergeOp.mergeSQL} """,
-  ${mergeOp.hasPartition ?
-    `'${stagingTablePlaceholder}', join_condition, partition_values, update_set, insert_cols, insert_vals` :
-    `'${stagingTablePlaceholder}', join_condition, update_set, insert_cols, insert_vals`}
-);
+    -- 📋 METADATA: Extract dynamic schema information
+    EXECUTE IMMEDIATE FORMAT(""" %s """, """${mergeOp.schemaSQL}""")
+    INTO update_set, insert_cols, insert_vals, join_condition;
 
--- ⚡ EXECUTE: Apply changes to target table
-EXECUTE IMMEDIATE merge_sql;
+    -- 📊 PARTITIONS: ${mergeOp.hasPartition ? 'Extract values for targeted merge' : 'No partition filtering needed'}
+    ${mergeOp.hasPartition
+      ? `SET partition_values = (
+           SELECT STRING_AGG(DISTINCT CONCAT("'", ${partitionColumn}, "'"), ", ")
+           FROM ${stagingTablePlaceholder}
+         );`
+      : `-- Partition values: Not applicable for this model`}
 
-/*
-┌─────────────────────────────────────────────────────────────┐
-│ ✅ INCREMENTAL PROCESSING COMPLETE                         │
-│ • Staging table expires automatically in 12 hours          │
-│ • Partition values available for assertion view filtering   │
-└─────────────────────────────────────────────────────────────┘
-*/
+    -- 🔀 MERGE: Build and execute dynamic UPSERT operation
+    SET merge_sql = FORMAT(""" ${mergeOp.mergeSQL} """,
+      ${mergeOp.hasPartition ?
+        `'${stagingTablePlaceholder}', join_condition, partition_values, update_set, insert_cols, insert_vals` :
+        `'${stagingTablePlaceholder}', join_condition, update_set, insert_cols, insert_vals`}
+    );
+
+    -- ⚡ EXECUTE: Apply changes to target table
+    EXECUTE IMMEDIATE merge_sql;
+
+    /*
+    ┌─────────────────────────────────────────────────────────────┐
+    │ ✅ INCREMENTAL PROCESSING COMPLETE                         │
+    │ • Staging table expires automatically in 12 hours          │
+    │ • Partition values available for assertion view filtering   │
+    └─────────────────────────────────────────────────────────────┘
+    */
+END IF;
       `;
     }
 }
