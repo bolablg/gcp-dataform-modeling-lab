@@ -1,7 +1,7 @@
 defaultProject: intelytix
 defaultLocation: us-central1
 defaultAssertionDataset: QualityOPs
-dataformCoreVersion: 3.0.26
+dataformCoreVersion: 3.0.34
 
 # Note: Update these settings for your environment:
 # - defaultProject: Your GCP project ID

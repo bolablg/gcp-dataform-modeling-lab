@@ -1,0 +1,31 @@
+config {
+    schema: "Dev",
+    type: "operations",
+    hasOutput: true,
+    tags: ["test", "smart-incremental"],
+    description: "Test smart incremental pattern with first-run detection"
+}
+
+js {
+    const { create } = require('includes/helpers');
+
+    const model = create(self(), {
+        type: "incremental",
+        uniqueKeys: ["test_id"],
+        partitionBy: "DATE(created_at)",
+        clusterBy: ["category"],
+        stagingDataset: "Staging",
+        fullRefresh: false
+    });
+}
+
+${ model.preSQL }
+
+SELECT
+    'test_' || CAST(n AS STRING) as test_id,
+    CURRENT_TIMESTAMP() as created_at,
+    'category_a' as category,
+    RAND() * 100 as value
+FROM UNNEST(GENERATE_ARRAY(1, 100)) as n
+
+${ model.postSQL }
