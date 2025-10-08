@@ -19,7 +19,7 @@ js {
             team:"intelytix",
             activity: "tutorial"
         },
-        fullRefresh: false,
+        fullRefresh: flase,
 
         // Data Quality Assertions
         assertions: {
