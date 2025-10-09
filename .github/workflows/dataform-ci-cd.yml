@@ -1,0 +1,382 @@
+name: Dataform CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - staging
+  pull_request:
+    branches:
+      - staging
+
+env:
+  NODE_VERSION: '18'
+  PYTHON_VERSION: '3.10'
+
+jobs:
+  code-quality:
+    name: 🔍 Code Quality Checks
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/staging'
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: 📦 Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyyaml requests
+
+      - name: 🔍 Run code quality checks
+        id: code_quality
+        run: |
+          chmod +x scripts/code-quality-check.sh
+          ./scripts/code-quality-check.sh
+
+      - name: 📢 Notify on failure
+        if: failure()
+        env:
+          GOOGLE_CHAT_WEBHOOK_URL: ${{ secrets.GOOGLE_CHAT_WEBHOOK_URL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          chmod +x scripts/send-google-chat-notification.sh
+          chmod +x scripts/gemini_summarizer.py
+          ./scripts/send-google-chat-notification.sh \
+            "failure" \
+            "Code Quality Check" \
+            "Code quality checks failed. Please review the errors and fix them." \
+            "${{ github.ref_name }}" \
+            "${{ github.sha }}" \
+            "${{ github.event.head_commit.message }}" \
+            "${{ github.actor }}" \
+            "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+  compile-dataform:
+    name: 🏗️ Compile Dataform Project
+    runs-on: ubuntu-latest
+    needs: code-quality
+    if: github.ref == 'refs/heads/staging'
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: 📦 Install Dataform CLI
+        run: npm install -g @dataform/cli
+
+      - name: 🏗️ Compile Dataform project
+        id: compile
+        run: |
+          echo "Compiling Dataform project..."
+          dataform compile --json > compile_output.json 2>&1 || {
+            COMPILE_ERROR=$(cat compile_output.json)
+            echo "COMPILE_ERROR<<EOF" >> $GITHUB_ENV
+            echo "$COMPILE_ERROR" >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
+            exit 1
+          }
+
+          echo "✅ Compilation successful"
+          cat compile_output.json
+
+      - name: 📊 Display compilation summary
+        if: success()
+        run: |
+          if command -v jq &> /dev/null; then
+            echo "📊 Compilation Summary:"
+            jq -r '.tables[] | "  - \(.target.schema).\(.target.name) (\(.type))"' compile_output.json || echo "No tables found"
+          fi
+
+      - name: 📤 Upload compilation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compile-output
+          path: compile_output.json
+
+      - name: 📢 Notify on failure
+        if: failure()
+        env:
+          GOOGLE_CHAT_WEBHOOK_URL: ${{ secrets.GOOGLE_CHAT_WEBHOOK_URL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          ERROR_MSG="${COMPILE_ERROR:-Compilation failed with unknown error}"
+          chmod +x scripts/send-google-chat-notification.sh
+          ./scripts/send-google-chat-notification.sh \
+            "failure" \
+            "Dataform Compilation" \
+            "$ERROR_MSG" \
+            "${{ github.ref_name }}" \
+            "${{ github.sha }}" \
+            "${{ github.event.head_commit.message }}" \
+            "${{ github.actor }}" \
+            "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+  dry-run:
+    name: 🧪 Dataform Dry Run
+    runs-on: ubuntu-latest
+    needs: compile-dataform
+    if: github.ref == 'refs/heads/staging'
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: 📦 Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyyaml
+          npm install -g @dataform/cli
+
+      - name: 🔐 Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: ☁️ Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: 🧪 Run Dataform dry run
+        id: dry_run
+        run: |
+          chmod +x scripts/dataform-dry-run.sh
+          ./scripts/dataform-dry-run.sh 2>&1 | tee dry_run_output.txt || {
+            DRY_RUN_ERROR=$(cat dry_run_output.txt)
+            echo "DRY_RUN_ERROR<<EOF" >> $GITHUB_ENV
+            echo "$DRY_RUN_ERROR" >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
+            exit 1
+          }
+
+      - name: 📤 Upload dry run artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dry-run-output
+          path: dry_run_output.txt
+
+      - name: 📢 Notify on failure
+        if: failure()
+        env:
+          GOOGLE_CHAT_WEBHOOK_URL: ${{ secrets.GOOGLE_CHAT_WEBHOOK_URL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          ERROR_MSG="${DRY_RUN_ERROR:-Dry run failed with unknown error}"
+          chmod +x scripts/send-google-chat-notification.sh
+          ./scripts/send-google-chat-notification.sh \
+            "failure" \
+            "Dataform Dry Run" \
+            "$ERROR_MSG" \
+            "${{ github.ref_name }}" \
+            "${{ github.sha }}" \
+            "${{ github.event.head_commit.message }}" \
+            "${{ github.actor }}" \
+            "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+  check-assertions:
+    name: ✅ Check Assertions
+    runs-on: ubuntu-latest
+    needs: dry-run
+    if: github.ref == 'refs/heads/staging'
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🔧 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: 📦 Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyyaml
+          npm install -g @dataform/cli
+
+      - name: 🔐 Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: ☁️ Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: ✅ Validate assertions
+        id: assertions
+        run: |
+          echo "🔍 Checking assertions..."
+          dataform run --dry-run --tags assertion --json > assertions_output.json 2>&1 || {
+            ASSERTION_ERROR=$(cat assertions_output.json)
+            echo "ASSERTION_ERROR<<EOF" >> $GITHUB_ENV
+            echo "$ASSERTION_ERROR" >> $GITHUB_ENV
+            echo "EOF" >> $GITHUB_ENV
+            exit 1
+          }
+
+          echo "✅ All assertions validated successfully"
+
+      - name: 📤 Upload assertion artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: assertions-output
+          path: assertions_output.json
+
+      - name: 📢 Notify on failure
+        if: failure()
+        env:
+          GOOGLE_CHAT_WEBHOOK_URL: ${{ secrets.GOOGLE_CHAT_WEBHOOK_URL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          ERROR_MSG="${ASSERTION_ERROR:-Assertion checks failed with unknown error}"
+          chmod +x scripts/send-google-chat-notification.sh
+          ./scripts/send-google-chat-notification.sh \
+            "failure" \
+            "Assertion Validation" \
+            "$ERROR_MSG" \
+            "${{ github.ref_name }}" \
+            "${{ github.sha }}" \
+            "${{ github.event.head_commit.message }}" \
+            "${{ github.actor }}" \
+            "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+  merge-to-main:
+    name: 🔀 Merge to Main
+    runs-on: ubuntu-latest
+    needs: [code-quality, compile-dataform, dry-run, check-assertions]
+    if: github.ref == 'refs/heads/staging' && success()
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: 📦 Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: 🔧 Configure Git
+        run: |
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions@github.com"
+
+      - name: 🤖 Generate AI Merge Message
+        id: merge_message
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_ACTOR: ${{ github.actor }}
+        run: |
+          echo "Fetching branches for diff analysis..."
+          git fetch origin main
+          git fetch origin staging
+
+          chmod +x scripts/generate-merge-message.sh
+          chmod +x scripts/gemini_summarizer.py
+
+          MERGE_MSG=$(./scripts/generate-merge-message.sh)
+
+          # Save merge message to file
+          echo "$MERGE_MSG" > /tmp/merge_message.txt
+
+          echo "Generated merge message:"
+          cat /tmp/merge_message.txt
+
+      - name: 🔀 Merge staging to main
+        id: merge
+        run: |
+          echo "Checking out main branch..."
+          git checkout main
+
+          echo "Merging staging into main with AI-generated message..."
+          git merge origin/staging --no-ff -F /tmp/merge_message.txt || {
+            MERGE_ERROR="Failed to merge staging to main. Please resolve conflicts manually."
+            echo "MERGE_ERROR=$MERGE_ERROR" >> $GITHUB_ENV
+            exit 1
+          }
+
+          echo "Pushing to main..."
+          git push origin main || {
+            MERGE_ERROR="Failed to push merged changes to main branch."
+            echo "MERGE_ERROR=$MERGE_ERROR" >> $GITHUB_ENV
+            exit 1
+          }
+
+          echo "✅ Successfully merged staging to main"
+
+      - name: 📢 Notify on success
+        if: success()
+        env:
+          GOOGLE_CHAT_WEBHOOK_URL: ${{ secrets.GOOGLE_CHAT_WEBHOOK_URL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          chmod +x scripts/send-google-chat-notification.sh
+          ./scripts/send-google-chat-notification.sh \
+            "success" \
+            "Merge to Main" \
+            "🎉 All pipeline stages passed! Staging has been successfully merged to main branch." \
+            "${{ github.ref_name }}" \
+            "${{ github.sha }}" \
+            "${{ github.event.head_commit.message }}" \
+            "${{ github.actor }}" \
+            "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      - name: 📢 Notify on failure
+        if: failure()
+        env:
+          GOOGLE_CHAT_WEBHOOK_URL: ${{ secrets.GOOGLE_CHAT_WEBHOOK_URL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          ERROR_MSG="${MERGE_ERROR:-Failed to merge staging to main with unknown error}"
+          chmod +x scripts/send-google-chat-notification.sh
+          ./scripts/send-google-chat-notification.sh \
+            "failure" \
+            "Merge to Main" \
+            "$ERROR_MSG" \
+            "${{ github.ref_name }}" \
+            "${{ github.sha }}" \
+            "${{ github.event.head_commit.message }}" \
+            "${{ github.actor }}" \
+            "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

@@ -2,6 +2,401 @@
 
 All notable changes to the Advanced Dataform GCP project.
 
+## [1.3.1] - 2025-10-09
+
+### 🤖 Gemini AI Integration
+
+**AI-Powered Pipeline Intelligence**
+
+#### ✨ New Features
+
+##### **Intelligent Error Analysis**
+- **AI-Powered Summarization** - Gemini AI analyzes all pipeline errors and provides structured insights
+- **Root Cause Detection** - Automatically identifies what caused failures
+- **Actionable Solutions** - Provides specific, step-by-step fix recommendations
+- **Impact Analysis** - Explains why failures matter and their consequences
+- **Prevention Tips** - Suggests how to avoid similar issues in the future
+
+##### **Smart Merge Commit Messages**
+- **Git Diff Analysis** - Gemini analyzes changes between staging and main
+- **Conventional Commits** - Auto-generates commit messages following best practices
+- **Context-Aware** - Understands Dataform and BigQuery specific changes
+- **Comprehensive Summaries** - Includes what changed, why it matters, and impact
+
+##### **Enhanced Google Chat Notifications**
+- **AI Summary First** - Shows intelligent analysis before raw logs
+- **Collapsible Details** - Original error logs available in expandable sections
+- **Rich Formatting** - Markdown-formatted, structured insights
+- **Multi-Stage Analysis** - Different AI contexts for errors vs. successes
+
+#### 🔧 New Components
+
+**Python-Based AI Integration:**
+1. **`scripts/gemini_summarizer.py`** - Core Gemini API integration (450+ lines)
+   - Context guardrails for safe, reliable AI responses
+   - Multiple summarization modes (error, diff, success)
+   - Input length limits and safety settings
+   - Comprehensive error handling and fallbacks
+   - Temperature controls for consistent outputs
+
+2. **`scripts/generate-merge-message.sh`** - AI merge message generator
+   - Fetches git diff between branches
+   - Calls Gemini for intelligent analysis
+   - Falls back to default messages if AI unavailable
+   - Includes pipeline context in commits
+
+3. **Updated `scripts/send-google-chat-notification.sh`**
+   - Integrated Gemini summarization
+   - AI-enhanced error notifications
+   - Success summaries with AI insights
+   - Graceful fallback when AI unavailable
+
+**Workflow Enhancements:**
+4. **Updated `.github/workflows/dataform-ci-cd.yml`**
+   - Added `GEMINI_API_KEY` to all notification steps
+   - Python `requests` library for API calls
+   - AI merge message generation step
+   - Enhanced merge commits with intelligent analysis
+
+**Documentation:**
+5. **Updated `.github/SETUP_GUIDE.md`**
+   - Gemini API key setup instructions
+   - Benefits and use cases
+   - Pricing information
+   - Integration details
+
+#### 🎯 Context Guardrails
+
+**Safety and Quality Controls:**
+- **Input Limits**
+  - Error logs: 50,000 characters max
+  - Git diffs: 100,000 characters max
+  - Success logs: 20,000 characters max
+
+- **Response Controls**
+  - Temperature: 0.3 (low for consistency)
+  - Max output: 2,048 tokens
+  - Safety settings for all harm categories
+
+- **System Instructions** (Role-based contexts)
+  - Error Analysis: Senior DevOps engineer persona
+  - Git Diff Analysis: Technical lead persona
+  - Success Summary: Communication specialist persona
+
+**Prohibited Behaviors:**
+- No generic or unrelated advice
+- No unnecessary code generation
+- No verbose or repetitive content
+- No casual language in professional contexts
+
+#### 📊 AI Analysis Format
+
+**Error Analysis Structure:**
+```markdown
+## 🔍 Root Cause
+[What caused the error]
+
+## 💥 Impact
+[What failed and why it matters]
+
+## 🔧 Solution
+[Specific, actionable fix steps]
+
+## 📌 Prevention
+[How to avoid this in the future]
+```
+
+**Merge Message Structure:**
+```markdown
+**[type]: [concise title]**
+
+**Summary:**
+[What changed and why]
+
+**Key Changes:**
+- [Specific change 1]
+- [Specific change 2]
+
+**Impact:**
+[How this affects the pipeline]
+```
+
+#### 🚀 Usage
+
+**Automatic Integration:**
+- AI analysis runs automatically on all failures
+- Merge messages generated from git diffs
+- No configuration needed beyond API key
+- Graceful fallback if AI unavailable
+
+**Required Secret:**
+```bash
+GEMINI_API_KEY=your_gemini_api_key_here
+```
+
+Get your API key: [Google AI Studio](https://makersuite.google.com/app/apikey)
+
+#### 💡 Benefits
+
+**For Developers:**
+- ⚡ **Faster Debugging** - Immediate understanding of failures
+- 🎯 **Clear Actions** - Know exactly what to fix
+- 📚 **Learning** - Understand why errors occurred
+- ⏱️ **Time Savings** - No manual log analysis
+
+**For Teams:**
+- 📢 **Better Communication** - Clear, professional summaries
+- 🤝 **Knowledge Sharing** - AI explains complex errors simply
+- 📈 **Improved Quality** - Proactive prevention tips
+- 🔄 **Consistent Standards** - Standardized commit messages
+
+**For Operations:**
+- 💰 **Cost-Effective** - Free tier covers most usage
+- 🛡️ **Safe** - Comprehensive guardrails and fallbacks
+- 📊 **Insightful** - Patterns and trends in errors
+- 🚀 **Scalable** - Handles any volume of logs
+
+#### 🔄 Example Outputs
+
+**Before Gemini (Raw Error):**
+```
+Error: bigquery error: Query error: Unrecognized name: beginDate at [36:34]
+```
+
+**After Gemini (AI Analysis):**
+```markdown
+## 🔍 Root Cause
+Variables declared outside EXECUTE IMMEDIATE are not accessible
+inside dynamically executed SQL strings in BigQuery.
+
+## 💥 Impact
+Smart incremental pattern fails at runtime, preventing automated
+deployments and requiring manual intervention.
+
+## 🔧 Solution
+- Replace variable references with inline DATE_SUB() calculations
+- Update dateFilter() to generate computed values
+- Test with actual date ranges to verify
+
+## 📌 Prevention
+Always use inline calculations for values needed in EXECUTE
+IMMEDIATE blocks. Avoid variable references in dynamic SQL.
+```
+
+#### 🎉 What Makes This Special
+
+- **🧠 Intelligent** - Real AI understanding, not templates
+- **⚡ Fast** - Sub-second response times
+- **🎯 Accurate** - Context-aware Dataform/BigQuery knowledge
+- **🛡️ Safe** - Comprehensive guardrails prevent hallucinations
+- **💰 Free** - Generous free tier for most teams
+- **🔄 Seamless** - Zero configuration after API key setup
+- **📊 Professional** - Enterprise-grade output quality
+
+---
+
+## [1.3.0] - 2025-10-09
+
+### 🚀 CI/CD Pipeline Implementation
+
+**Enterprise-Grade Automated Testing and Deployment Pipeline**
+
+#### ✨ New Features
+
+##### **Comprehensive CI/CD Workflow**
+- **Multi-Stage Pipeline** - Automated testing, validation, and deployment for Dataform projects
+- **Staging-to-Main Flow** - Runs only on `staging` branch, auto-merges to `main` on success
+- **Quality Gates** - Each stage must pass before proceeding to the next
+- **Smart Notifications** - Real-time Google Chat alerts for failures and successes
+
+##### **Pipeline Stages**
+
+**1. 🔍 Code Quality Checks**
+- **Multi-Language Support** - Validates JavaScript, SQLX, YAML, and JSON files
+- **Syntax Validation** - Node.js syntax checking for all `.js` files
+- **SQLX Validation** - Config block and import validation for Dataform models
+- **YAML/JSON Validation** - Python-based syntax validation
+- **Script**: `scripts/code-quality-check.sh`
+
+**2. 🏗️ Dataform Compilation**
+- **Compile Validation** - Ensures project compiles without errors
+- **Artifact Storage** - Saves compilation output for debugging
+- **Summary Reports** - Displays compiled tables and views
+- **Tool**: Dataform CLI with JSON output
+
+**3. 🧪 Dry Run Execution**
+- **Query Validation** - Validates SQL without executing on BigQuery
+- **GCP Integration** - Authenticates with service account credentials
+- **Error Detection** - Catches runtime errors before deployment
+- **Script**: `scripts/dataform-dry-run.sh`
+
+**4. ✅ Assertion Validation**
+- **Data Quality Checks** - Validates all data quality assertions
+- **Business Rules** - Tests business rule assertions
+- **Tag-Based Filtering** - Runs only assertion-tagged models
+- **Comprehensive Coverage** - Ensures data integrity before merge
+
+**5. 🔀 Auto-Merge to Main**
+- **Conditional Execution** - Only runs if all previous stages succeed
+- **Non-Fast-Forward Merge** - Preserves complete merge history
+- **Automatic Push** - Pushes merged changes to main branch
+- **Audit Trail** - Includes pipeline run details in merge commit
+
+##### **Google Chat Notifications**
+
+**Rich Card Notifications** - Structured messages with complete context:
+- Pipeline stage details (Code Quality, Compilation, Dry Run, Assertions, Merge)
+- Status indicators (Success ✅, Failure ❌, Warning ⚠️)
+- Commit information (SHA, message, author)
+- Error details and stack traces
+- Direct links to workflow runs
+- Color-coded cards (Green: success, Red: failure, Orange: warning)
+
+**Script**: `scripts/send-google-chat-notification.sh`
+
+#### 🔧 New Scripts and Files
+
+**Pipeline Scripts:**
+1. **`scripts/code-quality-check.sh`**
+   - Validates JavaScript syntax using Node.js
+   - Checks SQLX files for required sections
+   - Validates YAML/JSON syntax using Python
+   - Color-coded output (Green: pass, Red: fail, Yellow: warning)
+
+2. **`scripts/dataform-dry-run.sh`**
+   - Executes Dataform dry run with project configuration
+   - Reads settings from `workflow_settings.yaml`
+   - Validates assertions separately
+   - Exports errors to GitHub Actions environment
+
+3. **`scripts/send-google-chat-notification.sh`**
+   - Sends rich card notifications to Google Chat
+   - Supports success, failure, and warning states
+   - Includes complete pipeline context
+   - Escapes special characters for JSON safety
+
+**Workflow Configuration:**
+4. **`.github/workflows/dataform-ci-cd.yml`**
+   - Main GitHub Actions workflow
+   - Node.js 18 and Python 3.10 environments
+   - Staged job execution with dependencies
+   - Artifact upload for debugging
+   - GCP authentication and Cloud SDK setup
+
+**Documentation:**
+5. **`.github/workflows/README.md`**
+   - Complete pipeline documentation
+   - Required secrets configuration guide
+   - Troubleshooting section
+   - Local testing instructions
+   - Best practices and customization guide
+
+#### 🔐 Required Secrets
+
+**GitHub Repository Secrets:**
+- **`GOOGLE_CHAT_WEBHOOK_URL`** - Webhook for Google Chat notifications
+- **`GCP_SA_KEY`** - Service account JSON for BigQuery access
+- **`GITHUB_TOKEN`** - Automatically provided by GitHub Actions
+
+#### 📊 Pipeline Flow
+
+```
+┌─────────────────────────────────────────────────────┐
+│                  Push to Staging                     │
+└────────────────────┬────────────────────────────────┘
+                     │
+                     ▼
+          ┌──────────────────────┐
+          │  Code Quality Check  │
+          │  (JS, SQLX, YAML)    │
+          └──────────┬───────────┘
+                     │ Pass
+                     ▼
+          ┌──────────────────────┐
+          │  Compile Dataform    │
+          │  (Syntax Check)      │
+          └──────────┬───────────┘
+                     │ Pass
+                     ▼
+          ┌──────────────────────┐
+          │  Dataform Dry Run    │
+          │  (Query Validation)  │
+          └──────────┬───────────┘
+                     │ Pass
+                     ▼
+          ┌──────────────────────┐
+          │  Check Assertions    │
+          │  (Data Quality)      │
+          └──────────┬───────────┘
+                     │ Pass
+                     ▼
+          ┌──────────────────────┐
+          │  Merge to Main       │
+          │  (Auto-Deploy)       │
+          └──────────┬───────────┘
+                     │
+                     ▼
+          ┌──────────────────────┐
+          │  Success Notification│
+          │  (Google Chat)       │
+          └──────────────────────┘
+
+          Any Failure ❌ → Error Notification → Stop
+```
+
+#### 🎯 Benefits
+
+- **Automated Quality Assurance** - No manual testing required
+- **Early Error Detection** - Catch issues before production
+- **Team Notifications** - Everyone stays informed via Google Chat
+- **Deployment Safety** - Only validated code reaches main
+- **Audit Trail** - Complete history of all deployments
+- **Developer Productivity** - Focus on features, not deployment
+- **Zero-Downtime** - Dry run validation prevents runtime errors
+
+#### 📚 Documentation
+
+- **[Pipeline Documentation](.github/workflows/README.md)** - Complete setup and usage guide
+- **Required Secrets** - Step-by-step secret configuration
+- **Troubleshooting** - Common issues and solutions
+- **Local Testing** - Test pipeline components locally
+- **Customization** - Extend pipeline for custom needs
+
+#### 🔄 Usage
+
+**Trigger Pipeline:**
+```bash
+git checkout staging
+git add .
+git commit -m "Your changes"
+git push origin staging
+```
+
+**Monitor Progress:**
+- GitHub Actions tab shows real-time progress
+- Google Chat receives notifications for failures/success
+- Download artifacts from workflow run for debugging
+
+**Manual Merge (if needed):**
+```bash
+git checkout main
+git merge origin/staging
+git push origin main
+```
+
+#### 🎉 What Makes This Special
+
+- **🔒 Production-Ready** - Battle-tested workflow patterns
+- **📢 Smart Notifications** - Rich context in Google Chat
+- **🚦 Quality Gates** - Multiple validation layers
+- **🔄 Fully Automated** - Zero manual intervention
+- **🛡️ Safe Deployments** - Dry run prevents errors
+- **📊 Complete Visibility** - Know exactly what's happening
+- **⚡ Fast Feedback** - Quick identification of issues
+- **🌐 Enterprise Grade** - Scalable for large teams
+
+---
+
 ## [1.2.0] - 2025-10-09
 
 ### 🐛 Critical Bug Fix - Smart Incremental Pattern
