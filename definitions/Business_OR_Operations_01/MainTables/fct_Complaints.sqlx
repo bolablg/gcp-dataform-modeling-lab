@@ -7,7 +7,7 @@ config {
 }
 
 js {
-    const { create, dateFilter } = require('includes/helpers');
+    const { create } = require('includes/helpers');
     const factoryConfig = {
         type: "incremental",
         uniqueKeys: ["ID"],
@@ -19,7 +19,7 @@ js {
             team:"intelytix",
             activity: "tutorial"
         },
-        fullRefresh: flase,
+        fullRefresh: false,
 
         // Data Quality Assertions
         assertions: {
@@ -31,6 +31,7 @@ js {
         }
     };
     const model = create(self(), factoryConfig);
+    const dateFilter = model.dateFilter;  // Extract for convenience
 }
 
 ${ model.preSQL }
@@ -59,7 +60,7 @@ SELECT
   CUSTOMs.concatNonNullStrings([descriptor, resolution_description], ": ") as Description
 
 
-  
+
 FROM ${ref("products_db", "new_york_311_service_requests")}
 WHERE ${dateFilter('created_date')}
 

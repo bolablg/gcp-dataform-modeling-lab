@@ -4,11 +4,28 @@ const { ViewPattern } = require('../patterns/view-pattern.js');
 const { DateFilter } = require('./date-filter.js');
 const { TableOptions } = require('./table-options.js');
 
+// Store per-model contexts to avoid global state issues during compilation
+const modelContexts = new Map();
+
 /**
  * SQLXUtils - Pattern Coordinator
  * Delegates to specialized pattern modules for clean separation of concerns
  */
 class SQLXUtils {
+
+    /**
+     * Store model-specific context
+     */
+    static setModelContext(targetTable, context) {
+        modelContexts.set(targetTable, context);
+    }
+
+    /**
+     * Get model-specific context
+     */
+    static getModelContext(targetTable) {
+        return modelContexts.get(targetTable) || {};
+    }
 
     /**
      * Generate incremental pattern with MERGE operations
@@ -48,8 +65,8 @@ class SQLXUtils {
      * @param {boolean} fullRefresh - Whether this is a full refresh (default: false)
      * @returns {string} Date filter SQL condition
      */
-    static dateFilter(dateColumn = 'updated_at', useVariable = true, fullRefresh = false) {
-        return DateFilter.generate(dateColumn, useVariable, fullRefresh);
+    static dateFilter(dateColumn = 'updated_at', useVariable = true, fullRefresh = false, begin_daysBack = 2, end_daysBack = 0) {
+        return DateFilter.generate(dateColumn, useVariable, fullRefresh, begin_daysBack, end_daysBack);
     }
 
     /**
