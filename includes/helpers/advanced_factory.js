@@ -39,6 +39,15 @@ function create(target, factoryConfig, configDescription = '') {
     // Update global context for this model
     currentModelContext.fullRefresh = factoryConfig.fullRefresh || false;
     currentModelContext.targetTable = target;
+    currentModelContext.begin_daysBack = factoryConfig.begin_daysBack || 2;
+    currentModelContext.end_daysBack = factoryConfig.end_daysBack || 0;
+
+    // Store model-specific context for later use by dateFilter
+    SQLXUtils.setModelContext(target, {
+        fullRefresh: factoryConfig.fullRefresh || false,
+        begin_daysBack: factoryConfig.begin_daysBack || 2,
+        end_daysBack: factoryConfig.end_daysBack || 0
+    });
 
     const result = {};
 
@@ -77,14 +86,26 @@ function create(target, factoryConfig, configDescription = '') {
     result.postSQL = result.model.postSQL;
     result.metadata = result.model.metadata;
 
+    // Create a dateFilter function bound to this model's context
+    result.dateFilter = (dateColumn = 'updated_at', useVariable = true) => {
+        const context = SQLXUtils.getModelContext(target);
+        const fullRefresh = context.fullRefresh || false;
+        const begin_daysBack = context.begin_daysBack !== undefined ? context.begin_daysBack : 2;
+        const end_daysBack = context.end_daysBack !== undefined ? context.end_daysBack : 0;
+        return SQLXUtils.dateFilter(dateColumn, useVariable, fullRefresh, begin_daysBack, end_daysBack);
+    };
+
     return result;
 }
 
-// Expose utility functions
+// Expose utility functions (global dateFilter for backward compatibility)
 function dateFilter(dateColumn = 'updated_at', useVariable = true) {
-    // Automatically use fullRefresh from current model context
-    const fullRefresh = currentModelContext.fullRefresh;
-    return SQLXUtils.dateFilter(dateColumn, useVariable, fullRefresh);
+    // Get model-specific context
+    const context = SQLXUtils.getModelContext(currentModelContext.targetTable) || currentModelContext;
+    const fullRefresh = context.fullRefresh || false;
+    const begin_daysBack = context.begin_daysBack || 2;
+    const end_daysBack = context.end_daysBack || 0;
+    return SQLXUtils.dateFilter(dateColumn, useVariable, fullRefresh, begin_daysBack, end_daysBack);
 }
 
 module.exports = { create, dateFilter };

@@ -31,22 +31,27 @@ const pattern = create(self(), {
 });
 ```
 
-### dateFilter(dateColumn, useVariable)
+### model.dateFilter(dateColumn, useVariable)
 
-Generates date filter clause for WHERE statements.
+Generates date filter clause for WHERE statements. Available as a method on the model object created by `create()`.
 
 **Parameters:**
 - `dateColumn` (string) - Date column name (default: `'updated_at'`)
-- `useVariable` (boolean) - Use beginDate/limitDate variables (default: `true`)
+- `useVariable` (boolean) - Use inline date calculations (default: `true`)
 
-**Returns:** String with date filter SQL
+**Returns:** String with date filter SQL using inline `DATE_SUB()` calculations
 
 **Example:**
 ```javascript
-const { dateFilter } = require('includes/helpers');
-// Returns: DATE(created_date) BETWEEN beginDate AND limitDate
+const { create } = require('includes/helpers');
+const model = create(self(), factoryConfig);
+const dateFilter = model.dateFilter;  // Extract for convenience
+
+// Returns: DATE(created_date) BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL 3650 DAY) AND DATE_SUB(CURRENT_DATE(), INTERVAL 3649 DAY)
 WHERE ${dateFilter('created_date')}
 ```
+
+**Note:** As of v1.2.0, `dateFilter` is no longer exported globally. Use `model.dateFilter` instead to ensure each model uses its own `begin_daysBack` and `end_daysBack` configuration.
 
 ## Configuration Objects
 

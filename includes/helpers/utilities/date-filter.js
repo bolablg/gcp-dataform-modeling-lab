@@ -10,15 +10,18 @@ class DateFilter {
      * @param {string} dateColumn - Column name to filter on (default: 'updated_at')
      * @param {boolean} useVariable - Whether to use declared variables (default: true)
      * @param {boolean} fullRefresh - Whether this is a full refresh (default: false)
+     * @param {number} begin_daysBack - Days back for begin date (for inline calculation)
+     * @param {number} end_daysBack - Days back for end date (for inline calculation)
      * @returns {string} Date filter SQL condition
      */
-    static generate(dateColumn = 'updated_at', useVariable = true, fullRefresh = false) {
+    static generate(dateColumn = 'updated_at', useVariable = true, fullRefresh = false, begin_daysBack = 2, end_daysBack = 0) {
         if (fullRefresh) {
             return '1=1'; // No date filtering for full refresh
         }
 
         if (useVariable) {
-            return `DATE(${dateColumn}) BETWEEN beginDate AND limitDate`;
+            // For smart incremental: use inline date calculations to avoid variable scope issues in EXECUTE IMMEDIATE
+            return `DATE(${dateColumn}) BETWEEN DATE_SUB(CURRENT_DATE(), INTERVAL ${begin_daysBack} DAY) AND DATE_SUB(CURRENT_DATE(), INTERVAL ${end_daysBack} DAY)`;
         } else {
             return `DATE(${dateColumn}) >= DATE_SUB(CURRENT_DATE(), INTERVAL 2 DAY)`;
         }

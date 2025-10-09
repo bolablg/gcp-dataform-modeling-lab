@@ -32,7 +32,6 @@ module.exports = {
 
     // Utility shortcuts
     create: advancedFactory.create,
-    dateFilter: advancedFactory.dateFilter,
 
     // Advanced utilities (if needed)
     SQLXUtils,

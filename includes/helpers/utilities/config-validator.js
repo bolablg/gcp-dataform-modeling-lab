@@ -103,14 +103,22 @@ class ConfigValidator {
             if (!Number.isInteger(config.begin_daysBack) || config.begin_daysBack < 0) {
                 errors.push('begin_daysBack must be a non-negative integer');
             }
-            if (config.begin_daysBack > 365) {
-                warnings.push('begin_daysBack > 365 days may impact performance and costs');
-            }
         }
 
         if (typeof config.end_daysBack !== 'undefined') {
             if (!Number.isInteger(config.end_daysBack) || config.end_daysBack < 0) {
                 errors.push('end_daysBack must be a non-negative integer');
+            }
+        }
+
+        // Validate date range window (only warn if the window is > 30 days)
+        if (typeof config.begin_daysBack !== 'undefined' && typeof config.end_daysBack !== 'undefined') {
+            const dateRangeWindow = config.begin_daysBack - config.end_daysBack;
+            if (dateRangeWindow > 30) {
+                warnings.push(`Date range window (${dateRangeWindow} days) > 30 days may impact performance and costs`);
+            }
+            if (config.begin_daysBack < config.end_daysBack) {
+                warnings.push('begin_daysBack should be >= end_daysBack (begin_daysBack is further in the past)');
             }
         }
 

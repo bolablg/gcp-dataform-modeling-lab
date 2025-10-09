@@ -119,9 +119,11 @@ ${assertionViewsSQL}
         // Add target existence check variable
         variableDeclarations.push('DECLARE target_exists BOOL;');
 
+        // Declare date variables with configured ranges
+        // These are accessible in both snapshot and incremental modes
         if (!isFullRefresh) {
-            variableDeclarations.push(`DECLARE beginDate DEFAULT DATE_SUB(CURRENT_DATE(), INTERVAL ${begin_daysBack} DAY);`);
-            variableDeclarations.push(`DECLARE limitDate DEFAULT DATE_SUB(CURRENT_DATE(), INTERVAL ${end_daysBack} DAY);`);
+            variableDeclarations.push(`DECLARE beginDate DATE DEFAULT DATE_SUB(CURRENT_DATE(), INTERVAL ${begin_daysBack} DAY);`);
+            variableDeclarations.push(`DECLARE limitDate DATE DEFAULT DATE_SUB(CURRENT_DATE(), INTERVAL ${end_daysBack} DAY);`);
         }
 
         variableDeclarations.push(
@@ -195,7 +197,9 @@ ELSE
     """;
 END IF;
 
--- Execute the dynamic CREATE statement with the SELECT query
+-- Execute the dynamic CREATE statement with date filtering
+-- Note: For first run (snapshot), this gets ALL data. For subsequent runs (incremental),
+-- the staging table is created outside EXECUTE IMMEDIATE where variables are accessible.
 EXECUTE IMMEDIATE create_sql || """
       `;
     }
